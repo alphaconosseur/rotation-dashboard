@@ -254,7 +254,7 @@ def quadrant(x: float, y: float) -> str:
 # --------------------------------------------------------------------------
 def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
                     trend_lbl: str, mom_lbl: str, bench_name: str,
-                    trail_for: list) -> go.Figure:
+                    trail_for: list, unit: str = "week") -> go.Figure:
     """Quadrant chart. xs / ys: rows = weekly points (oldest -> newest), cols = tickers.
 
     Every line gets a dot for today. Only lines in `trail_for` get a trail.
@@ -284,7 +284,7 @@ def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
     # and darken towards today, and an arrow points into today's dot.
     n = len(xs)
     if n > 1 and trail_for:
-        weeks_ago = list(range(n - 1, 0, -1))  # excludes today (the big dot)
+        periods_ago = list(range(n - 1, 0, -1))  # excludes today (the big dot)
         sizes = np.linspace(4, 8, n - 1).tolist()
         alphas = np.linspace(0.35, 0.9, n - 1)
         colors = [f"rgba(57,135,229,{a:.2f})" for a in alphas]
@@ -298,8 +298,8 @@ def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
                 x=xs[t].values[:-1], y=ys[t].values[:-1], mode="markers",
                 showlegend=False,
                 marker=dict(size=sizes, color=colors),
-                customdata=[[names[t], w, "s" if w > 1 else ""] for w in weeks_ago],
-                hovertemplate=("<b>%{customdata[0]}</b>, %{customdata[1]} week%{customdata[2]} ago"
+                customdata=[[names[t], w, unit + ("s" if w > 1 else "")] for w in periods_ago],
+                hovertemplate=("<b>%{customdata[0]}</b>, %{customdata[1]} %{customdata[2]} ago"
                                "<br>Trend: %{x:+.1f}%<br>Momentum: %{y:+.1f}%<extra></extra>"),
             ))
             # Start of the trail
@@ -420,7 +420,7 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
 
     # --- Filters (one row) -------------------------------------------------
     all_groups = list(dict.fromkeys(groups[t] for t in available))
-    f1, f2, f3 = st.columns([5, 2, 2])
+    f1, f2, f3, f4 = st.columns([4, 2, 2, 2])
     with f1:
         chosen = st.pills("Groups", all_groups, selection_mode="multi",
                           default=all_groups, key=f"{key}_groups")
@@ -430,7 +430,17 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
                                      help=" · ".join(f"{k}: {v}" for k, v in SPEED_HELP.items()))
         speed = speed or "Standard"
     with f3:
-        tail_weeks = st.slider("Trail length (weeks)", 1, 8, 4, key=f"{key}_tail")
+        trail_unit = st.segmented_control(
+            "Trail in", ["Weeks", "Months"], default="Weeks", key=f"{key}_unit",
+            help="Weeks: one dot per week, for recent turns. Months: one dot per month, "
+                 "for the bigger picture (pairs well with Slow speed).")
+        trail_unit = trail_unit or "Weeks"
+    with f4:
+        if trail_unit == "Weeks":
+            trail_n = st.slider("Trail length (weeks)", 1, 8, 4, key=f"{key}_tail_w")
+        else:
+            trail_n = st.slider("Trail length (months)", 1, 12, 6, key=f"{key}_tail_m")
+    step = 5 if trail_unit == "Weeks" else 21  # trading days per dot
 
     shown = [t for t in available if groups[t] in (chosen or [])]
     if not shown:
@@ -445,7 +455,7 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
 
     # Weekly sample points for tails, oldest -> newest
     last = len(px) - 1
-    pts = [last - 5 * k for k in range(tail_weeks, -1, -1) if last - 5 * k >= 0]
+    pts = [last - step * k for k in range(trail_n, -1, -1) if last - step * k >= 0]
     xs = rel_trend.iloc[pts].dropna(axis=1, how="any")
     ys = rel_mom.iloc[pts][xs.columns]
     ys = ys.dropna(axis=1, how="any")
@@ -465,7 +475,7 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
         st.markdown("#### Rotation map")
         st.caption(
             "The big dot is where a line sits today. A trail runs back in time, one small "
-            "dot per week: the hollow ring is where it started and the arrow shows which way "
+            "dot per week (or per month, if you switch \"Trail in\" to Months): the hollow ring is where it started and the arrow shows which way "
             "it's heading. Lines tend to rotate clockwise: Improving → Leading → Weakening → "
             "Lagging. By default, trails show for the lines that changed zone this week. Hover any dot for "
             "its name and date, or drag a box to zoom."
@@ -480,7 +490,8 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
         if xs.shape[1] == 0:
             st.info("Not enough history for the chosen speed.")
         else:
-            fig = rotation_figure(xs, ys, names, trend_lbl, mom_lbl, bench_name, trail_for)
+            fig = rotation_figure(xs, ys, names, trend_lbl, mom_lbl, bench_name, trail_for,
+                                  unit="week" if trail_unit == "Weeks" else "month")
             st.plotly_chart(fig, theme=None, key=f"{key}_rrg",
                             config={"displaylogo": False,
                                     "modeBarButtonsToRemove": ["lasso2d", "select2d"]})
@@ -625,7 +636,9 @@ That gives four zones:
 Lines tend to travel clockwise through the zones. A trail shows a line's path over the
 last few weeks, so you can see the direction, not just the position. It starts at the hollow
 ring, has one small dot per week (getting bigger and darker towards today), and ends with an
-arrow into today's big dot. By default, trails are shown
+arrow into today's big dot. Switch **Trail in** to *Months* for one dot per month going back
+up to a year. Weekly trails show recent turns; monthly trails show the bigger cycle, and pair
+well with the *Slow* rotation speed. By default, trails are shown
 for the lines that changed zone this week; use "Show trail for" to add others. Dots near the
 centre are close to the benchmark, so their names only show on hover.
 

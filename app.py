@@ -441,6 +441,13 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
         else:
             trail_n = st.slider("Trail length (months)", 1, 12, 6, key=f"{key}_tail_m")
     step = 5 if trail_unit == "Weeks" else 21  # trading days per dot
+    if trail_unit == "Months" and speed != "Slow":
+        st.caption(
+            "Tip: monthly trails read best with **Slow** speed (6M trend, 3M momentum). "
+            "Then the zones are measured over the same longer time frame the trail covers; "
+            f"with {speed} speed the zones reflect only the last "
+            f"{LOOKBACK_LABEL[SPEEDS[speed][0]]} / {LOOKBACK_LABEL[SPEEDS[speed][1]]}."
+        )
 
     shown = [t for t in available if groups[t] in (chosen or [])]
     if not shown:
@@ -637,8 +644,9 @@ Lines tend to travel clockwise through the zones. A trail shows a line's path ov
 last few weeks, so you can see the direction, not just the position. It starts at the hollow
 ring, has one small dot per week (getting bigger and darker towards today), and ends with an
 arrow into today's big dot. Switch **Trail in** to *Months* for one dot per month going back
-up to a year. Weekly trails show recent turns; monthly trails show the bigger cycle, and pair
-well with the *Slow* rotation speed. By default, trails are shown
+up to a year. Weekly trails show recent turns; monthly trails show the bigger cycle. Use
+monthly trails with the *Slow* rotation speed (6M trend, 3M momentum), so the zones are
+measured over the same longer time frame the trail covers. By default, trails are shown
 for the lines that changed zone this week; use "Show trail for" to add others. Dots near the
 centre are close to the benchmark, so their names only show on hover.
 

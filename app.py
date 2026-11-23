@@ -252,12 +252,20 @@ def quadrant(x: float, y: float) -> str:
 # Charts and tables
 # --------------------------------------------------------------------------
 def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
-                    trend_lbl: str, mom_lbl: str, bench_name: str) -> go.Figure:
-    """Quadrant chart. xs / ys: rows = weekly points (oldest -> newest), cols = tickers."""
-    fig = go.Figure()
+                    trend_lbl: str, mom_lbl: str, bench_name: str,
+                    trail_for: list) -> go.Figure:
+    """Quadrant chart. xs / ys: rows = weekly points (oldest -> newest), cols = tickers.
 
-    xr = float(np.nanmax(np.abs(xs.values))) * 1.25 if xs.size else 1
-    yr = float(np.nanmax(np.abs(ys.values))) * 1.2 if ys.size else 1
+    Every line gets a dot for today. Only lines in `trail_for` get a trail.
+    """
+    fig = go.Figure()
+    trail_for = [t for t in xs.columns if t in trail_for]
+
+    # Fit the axes to today's dots plus the trails actually drawn
+    fit_x = pd.concat([xs.iloc[-1], xs[trail_for].stack()]) if trail_for else xs.iloc[-1]
+    fit_y = pd.concat([ys.iloc[-1], ys[trail_for].stack()]) if trail_for else ys.iloc[-1]
+    xr = float(np.nanmax(np.abs(fit_x.values))) * 1.25 if len(fit_x) else 1
+    yr = float(np.nanmax(np.abs(fit_y.values))) * 1.2 if len(fit_y) else 1
     xr, yr = max(xr, 0.5), max(yr, 0.5)
 
     # Quadrant tints: leading = the "beating" hue, lagging = the "trailing" hue
@@ -271,10 +279,10 @@ def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
     fig.add_annotation(x=-xr, y=-yr, text="<b>Lagging</b>", xanchor="left", yanchor="bottom", **corner)
     fig.add_annotation(x=-xr, y=yr, text="<b>Improving</b>", xanchor="left", yanchor="top", **corner)
 
-    # Tails: one trace, segments separated by None
-    if len(xs) > 1:
+    # Trails: one trace, segments separated by None
+    if len(xs) > 1 and trail_for:
         tx, ty = [], []
-        for t in xs.columns:
+        for t in trail_for:
             tx += list(xs[t].values) + [None]
             ty += list(ys[t].values) + [None]
         fig.add_trace(go.Scatter(
@@ -282,15 +290,20 @@ def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
             line=dict(color=TAIL, width=2), marker=dict(size=5, color=TAIL),
         ))
 
-    # Heads: current position. Labels point away from the centre to limit overlap.
+    # Dots: today's position. Names are shown for trailed lines and for dots
+    # away from the crowded middle; the rest show their name on hover.
     hx, hy = xs.iloc[-1], ys.iloc[-1]
     labels = [names[t] for t in xs.columns]
     quads = [quadrant(a, b) for a, b in zip(hx, hy)]
+    shown_text = [
+        names[t] if (t in trail_for or abs(a) > 0.3 * xr or abs(b) > 0.3 * yr) else ""
+        for t, a, b in zip(xs.columns, hx, hy)
+    ]
     positions = [("top" if b >= 0 else "bottom") + (" right" if a >= 0 else " left")
                  for a, b in zip(hx, hy)]
     fig.add_trace(go.Scatter(
         x=hx, y=hy, mode="markers+text", showlegend=False,
-        text=labels, textposition=positions, cliponaxis=False,
+        text=shown_text, textposition=positions, cliponaxis=False,
         textfont=dict(size=11, color=INK_2, family=FONT),
         marker=dict(size=11, color=HEAD, line=dict(width=2, color=SURFACE)),
         customdata=np.stack([labels, quads, list(xs.columns)], axis=-1),
@@ -390,7 +403,7 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
                                      help=" · ".join(f"{k}: {v}" for k, v in SPEED_HELP.items()))
         speed = speed or "Standard"
     with f3:
-        tail_weeks = st.slider("Tail (weeks)", 0, 8, 4, key=f"{key}_tail")
+        tail_weeks = st.slider("Trail length (weeks)", 1, 8, 4, key=f"{key}_tail")
 
     shown = [t for t in available if groups[t] in (chosen or [])]
     if not shown:
@@ -417,25 +430,35 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
     q_prev = {t: quadrant(x_prev[t], y_prev[t]) for t in shown}
 
     # --- Rotation map + what changed --------------------------------------
+    movers = [t for t in shown
+              if q_now[t] != q_prev[t] and "—" not in (q_now[t], q_prev[t])]
+
     left, right = st.columns([7, 3], gap="large")
     with left:
         st.markdown("#### Rotation map")
         st.caption(
-            "Each dot is where a line sits today; the tail shows its path over the past "
-            "weeks. Lines tend to rotate clockwise: Improving → Leading → Weakening → Lagging."
+            "Each dot is where a line sits today. Lines tend to rotate clockwise: "
+            "Improving → Leading → Weakening → Lagging. Trails start on the lines that "
+            "changed zone this week. Hover any dot for its name, or drag a box to zoom."
+        )
+        trail_for = st.multiselect(
+            "Show trail for", options=list(xs.columns),
+            default=[t for t in movers if t in xs.columns],
+            format_func=lambda t: names[t],
+            key=f"{key}_trails_{hash(tuple(xs.columns))}",
+            placeholder="Pick lines to see their path",
         )
         if xs.shape[1] == 0:
             st.info("Not enough history for the chosen speed.")
         else:
-            fig = rotation_figure(xs, ys, names, trend_lbl, mom_lbl, bench_name)
+            fig = rotation_figure(xs, ys, names, trend_lbl, mom_lbl, bench_name, trail_for)
             st.plotly_chart(fig, theme=None, key=f"{key}_rrg",
                             config={"displaylogo": False,
                                     "modeBarButtonsToRemove": ["lasso2d", "select2d"]})
 
     with right:
         st.markdown("#### What changed this week")
-        moves = [(t, q_prev[t], q_now[t]) for t in shown
-                 if q_now[t] != q_prev[t] and "—" not in (q_now[t], q_prev[t])]
+        moves = [(t, q_prev[t], q_now[t]) for t in movers]
         if moves:
             for target in ["Leading", "Improving", "Weakening", "Lagging"]:
                 into = [m for m in moves if m[2] == target]
@@ -570,8 +593,10 @@ That gives four zones:
 - **Lagging**: weak trend, still losing. The current losers.
 - **Improving**: weak trend, but gaining lately. Where a new rotation often starts.
 
-Lines tend to travel clockwise through the zones. The tail shows the path over the last
-few weeks, so you can see the direction, not just the position.
+Lines tend to travel clockwise through the zones. A trail shows a line's path over the
+last few weeks, so you can see the direction, not just the position. Trails start on the
+lines that changed zone this week; use "Show trail for" to add others. Dots near the
+centre are close to the benchmark, so their names only show on hover.
 
 **Rotation speed.** *Standard* uses 3 months for trend and 1 month for momentum.
 *Fast* (1M / 1W) reacts quicker but is noisier. *Slow* (6M / 3M) shows the big shifts.

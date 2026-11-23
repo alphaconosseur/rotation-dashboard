@@ -135,6 +135,7 @@ GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 HEAD = "#2a78d6"      # current position marker
 TAIL = "#9ec5f4"      # path over previous weeks
+TAIL_DARK = "#3987e5" # trail start ring and direction arrow
 DIV_POS = "#1c5cab"   # beating the benchmark
 DIV_NEG = "#c03b3a"   # trailing the benchmark
 DIV_MID = "#f0efec"   # neutral
@@ -279,16 +280,42 @@ def rotation_figure(xs: pd.DataFrame, ys: pd.DataFrame, names: dict,
     fig.add_annotation(x=-xr, y=-yr, text="<b>Lagging</b>", xanchor="left", yanchor="bottom", **corner)
     fig.add_annotation(x=-xr, y=yr, text="<b>Improving</b>", xanchor="left", yanchor="top", **corner)
 
-    # Trails: one trace, segments separated by None
-    if len(xs) > 1 and trail_for:
-        tx, ty = [], []
+    # Trails, oldest -> newest. The start is a hollow ring, the weekly dots grow
+    # and darken towards today, and an arrow points into today's dot.
+    n = len(xs)
+    if n > 1 and trail_for:
+        weeks_ago = list(range(n - 1, 0, -1))  # excludes today (the big dot)
+        sizes = np.linspace(4, 8, n - 1).tolist()
+        alphas = np.linspace(0.35, 0.9, n - 1)
+        colors = [f"rgba(57,135,229,{a:.2f})" for a in alphas]
         for t in trail_for:
-            tx += list(xs[t].values) + [None]
-            ty += list(ys[t].values) + [None]
-        fig.add_trace(go.Scatter(
-            x=tx, y=ty, mode="lines+markers", hoverinfo="skip", showlegend=False,
-            line=dict(color=TAIL, width=2), marker=dict(size=5, color=TAIL),
-        ))
+            fig.add_trace(go.Scatter(
+                x=xs[t].values, y=ys[t].values, mode="lines",
+                hoverinfo="skip", showlegend=False,
+                line=dict(color=TAIL, width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=xs[t].values[:-1], y=ys[t].values[:-1], mode="markers",
+                showlegend=False,
+                marker=dict(size=sizes, color=colors),
+                customdata=[[names[t], w, "s" if w > 1 else ""] for w in weeks_ago],
+                hovertemplate=("<b>%{customdata[0]}</b>, %{customdata[1]} week%{customdata[2]} ago"
+                               "<br>Trend: %{x:+.1f}%<br>Momentum: %{y:+.1f}%<extra></extra>"),
+            ))
+            # Start of the trail
+            fig.add_trace(go.Scatter(
+                x=[xs[t].values[0]], y=[ys[t].values[0]], mode="markers",
+                hoverinfo="skip", showlegend=False,
+                marker=dict(size=11, symbol="circle-open", color=TAIL_DARK, line=dict(width=2)),
+            ))
+            # Arrow from last week into today
+            fig.add_annotation(
+                x=xs[t].values[-1], y=ys[t].values[-1],
+                ax=xs[t].values[-2], ay=ys[t].values[-2],
+                xref="x", yref="y", axref="x", ayref="y", text="",
+                showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2,
+                arrowcolor=TAIL_DARK, standoff=7,
+            )
 
     # Dots: today's position. Names are shown for trailed lines and for dots
     # away from the crowded middle; the rest show their name on hover.
@@ -437,9 +464,11 @@ def render_view(key: str, px_all: pd.DataFrame, tmt_level, tmt_members):
     with left:
         st.markdown("#### Rotation map")
         st.caption(
-            "Each dot is where a line sits today. Lines tend to rotate clockwise: "
-            "Improving → Leading → Weakening → Lagging. Trails start on the lines that "
-            "changed zone this week. Hover any dot for its name, or drag a box to zoom."
+            "The big dot is where a line sits today. A trail runs back in time, one small "
+            "dot per week: the hollow ring is where it started and the arrow shows which way "
+            "it's heading. Lines tend to rotate clockwise: Improving → Leading → Weakening → "
+            "Lagging. By default, trails show for the lines that changed zone this week. Hover any dot for "
+            "its name and date, or drag a box to zoom."
         )
         trail_for = st.multiselect(
             "Show trail for", options=list(xs.columns),
@@ -594,8 +623,10 @@ That gives four zones:
 - **Improving**: weak trend, but gaining lately. Where a new rotation often starts.
 
 Lines tend to travel clockwise through the zones. A trail shows a line's path over the
-last few weeks, so you can see the direction, not just the position. Trails start on the
-lines that changed zone this week; use "Show trail for" to add others. Dots near the
+last few weeks, so you can see the direction, not just the position. It starts at the hollow
+ring, has one small dot per week (getting bigger and darker towards today), and ends with an
+arrow into today's big dot. By default, trails are shown
+for the lines that changed zone this week; use "Show trail for" to add others. Dots near the
 centre are close to the benchmark, so their names only show on hover.
 
 **Rotation speed.** *Standard* uses 3 months for trend and 1 month for momentum.
